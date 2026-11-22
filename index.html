@@ -27,6 +27,11 @@ button:hover{background:#ffffff26}
 .big{padding:10px 16px;font-size:15px}
 .primary{background:var(--acc);color:#0b0d12;border-color:var(--acc);font-weight:600}
 .primary:hover{background:#9af0a1}
+@media (max-width:560px){
+  .title{display:none}
+  button,select{font-size:13px;padding:5px 9px}
+  #hint{font-size:12px}
+}
 #msg{position:fixed;top:56px;left:50%;transform:translateX(-50%);max-width:92%;padding:8px 14px;border-radius:12px;background:#2a1e10ee;color:#ffcf8f;font-size:14px;z-index:4;display:none;text-align:center}
 </style>
 </head>
@@ -37,6 +42,8 @@ button:hover{background:#ffffff26}
 <div id="bar">
   <span class="title">🪕 Air Harp</span>
   <button id="modeBtn" title="Что делает мышь/палец">✏️ Рисую</button>
+  <select id="kindSel" title="Что играет струна"><option value="chords">🎸 Аккорды</option><option value="notes">🎵 Ноты</option></select>
+  <select id="keySel" title="Тональность"></select>
   <select id="scaleSel" title="Лад"></select>
   <button id="harpBtn">🎼 Готовая арфа</button>
   <button id="undoBtn">↶ Отменить</button>
@@ -48,7 +55,7 @@ button:hover{background:#ffffff26}
 <div id="start">
   <div class="card">
     <h1>🪕 Воздушная арфа</h1>
-    <p>Рисуйте струны в воздухе пальцами и играйте на них. Короткая струна звучит выше, длинная ниже. Ноты подстраиваются под выбранный лад, поэтому фальши не будет.</p>
+    <p>Рисуйте струны в воздухе пальцами и играйте на них. Каждая струна — <b>аккорд</b> (или отдельная нота, если выбрать режим «Ноты»). Короткая струна звучит выше, длинная ниже. Все аккорды подбираются в одной тональности, поэтому всегда звучат вместе.</p>
     <ol>
       <li><b>Сведите</b> большой и указательный пальцы, чтобы начать струну.</li>
       <li><b>Тяните</b>: засечки показывают ноты.</li>
@@ -99,24 +106,61 @@ const SCALES = {
   'Мажор': [0,2,4,5,7,9,11],
   'Хроматика': [0,1,2,3,4,5,6,7,8,9,10,11],
 };
+const CHORD_SETS = {
+  'Мажор': { steps:[0,2,4,5,7,9,11], sev:false },
+  'Мажор + септаккорды': { steps:[0,2,4,5,7,9,11], sev:true },
+  'Минор': { steps:[0,2,3,5,7,8,10], sev:false },
+  'Минор + септаккорды': { steps:[0,2,3,5,7,8,10], sev:true },
+};
+let kind = 'chords';                             // chords | notes
+let key = 0;                                     // tonic pitch class (0 = C)
 let scale = SCALES['Пентатоника (мажор)'];
+let chordSet = CHORD_SETS['Мажор'];
 const LOW = 48, HIGH = 84;                       // C3 … C6
+const pc = m => ((m - key) % 12 + 12) % 12;
 const noteName = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
 const midiFreq = m => 440 * 2 ** ((m - 69) / 12);
 const Lref = () => Math.hypot(W, H) * 0.62;      // length of the lowest note
 const lenForMidi = m => Lref() * 2 ** ((LOW - m) / 12);   // shorter string = higher note
 const midiForLen = L => LOW + 12 * Math.log2(Lref() / L);
-const scaleNotes = () => { const a=[]; for (let m=LOW; m<=HIGH; m++) if (scale.includes(m%12)) a.push(m); return a; };
+// candidate pitches a string can snap to: scale notes, or chord roots of the key
+function candidates(){
+  const set = kind === 'chords' ? chordSet.steps : scale, a = [];
+  for (let m=LOW; m<=HIGH; m++) if (set.includes(pc(m))) a.push(m);
+  return a;
+}
 function snap(L){
   if (L < lenForMidi(HIGH) * 0.75) return null;
   const c = midiForLen(L); let best = null, bd = 1e9;
-  for (const n of scaleNotes()){ const d = Math.abs(n - c); if (d < bd){ bd = d; best = n; } }
+  for (const n of candidates()){ const d = Math.abs(n - c); if (d < bd){ bd = d; best = n; } }
   return best;
 }
+// diatonic chord built on a root: stack thirds inside the key
+function chordOn(root){
+  const st = chordSet.steps, deg = st.indexOf(pc(root));
+  const ks = chordSet.sev ? [0,2,4,6] : [0,2,4];
+  const tones = ks.map(k => { const d = deg + k; return root + st[d % 7] + 12*Math.floor(d / 7) - st[deg]; });
+  const iv = tones.map(t => t - root).join(',');
+  const SUF = { '0,4,7':'', '0,3,7':'m', '0,3,6':'dim', '0,4,8':'+',
+    '0,4,7,11':'maj7', '0,4,7,10':'7', '0,3,7,10':'m7', '0,3,6,10':'m7♭5', '0,3,6,9':'dim7', '0,3,7,11':'m(maj7)', '0,4,8,11':'+maj7' };
+  const notes = [...(root - 12 >= 36 ? [root - 12] : []), ...tones, root + 12];
+  return { notes, label: NAMES[root % 12] + (SUF[iv] ?? ''), dim: iv.startsWith('0,3,6') };
+}
+function infoFor(m){
+  return kind === 'chords' ? { root:m, ...chordOn(m) } : { root:m, notes:[m], label:noteName(m) };
+}
 
-const sel = $('scaleSel');
-for (const k in SCALES){ const o = document.createElement('option'); o.textContent = k; sel.appendChild(o); }
-sel.onchange = () => { scale = SCALES[sel.value]; };
+const sel = $('scaleSel'), kindSel = $('kindSel'), keySel = $('keySel');
+NAMES.forEach((n, i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; keySel.appendChild(o); });
+function fillScaleSel(){
+  sel.innerHTML = '';
+  for (const k in (kind === 'chords' ? CHORD_SETS : SCALES)){ const o = document.createElement('option'); o.textContent = k; sel.appendChild(o); }
+  sel.value = kind === 'chords' ? Object.keys(CHORD_SETS).find(k => CHORD_SETS[k] === chordSet) : Object.keys(SCALES).find(k => SCALES[k] === scale);
+}
+fillScaleSel();
+sel.onchange = () => { if (kind === 'chords') chordSet = CHORD_SETS[sel.value]; else scale = SCALES[sel.value]; };
+kindSel.onchange = () => { kind = kindSel.value; fillScaleSel(); setHint(); };
+keySel.onchange = () => { key = +keySel.value; };
 
 // ---------- audio: Karplus–Strong plucked string ----------
 let ac = null, bus = null;
@@ -156,19 +200,29 @@ function ksBuffer(m){
   for (let i=0;i<n;i++){ d[i] /= peak; if (i > n - fade) d[i] *= (n - i) / fade; }
   cache.set(m, buf); return buf;
 }
-function playNote(m, vel = 0.8, pan = 0){
+function playNote(m, vel = 0.8, pan = 0, delay = 0){
   if (!ac) return;
   const src = ac.createBufferSource(); src.buffer = ksBuffer(m);
   const gn = ac.createGain(); gn.gain.value = 0.45 * vel;
   src.connect(gn);
   if (ac.createStereoPanner){ const p = ac.createStereoPanner(); p.pan.value = clamp(pan,-1,1); gn.connect(p); p.connect(bus); }
   else gn.connect(bus);
-  src.start();
+  src.start(ac.currentTime + delay);
 }
+// strum a chord: notes one after another, low→high or high→low
+function playNotes(notes, vel, pan, dir = 1){
+  if (notes.length === 1) return playNote(notes[0], vel, pan);
+  const order = dir >= 0 ? notes : [...notes].reverse();
+  const gap = 0.016 + (1 - vel) * 0.03;           // faster swipe = tighter strum
+  const scaleV = 1.6 / Math.sqrt(notes.length);
+  order.forEach((m, i) => playNote(m, vel * scaleV * (i === 0 || i === order.length-1 ? 0.8 : 0.65), pan, i * gap));
+}
+const warm = notes => { if (ac) notes.forEach(ksBuffer); };
 
 // ---------- strings ----------
 function makeString(x1,y1,x2,y2,m){
-  return { x1,y1,x2,y2, midi:m, energy:0, born:performance.now(), last:0 };
+  const info = infoFor(m); warm(info.notes);
+  return { x1,y1,x2,y2, midi:m, notes:info.notes, label:info.label, energy:0, born:performance.now(), last:0 };
 }
 function finishDraw(d){
   const L = Math.hypot(d.x2-d.x1, d.y2-d.y1), m = snap(L);
@@ -176,11 +230,11 @@ function finishDraw(d){
   const ux = (d.x2-d.x1)/L, uy = (d.y2-d.y1)/L, Ls = lenForMidi(m);
   const s = makeString(d.x1, d.y1, d.x1 + ux*Ls, d.y1 + uy*Ls, m);
   strings.push(s); if (strings.length > MAX_STRINGS) strings.shift();
-  s.energy = 0.6; playNote(m, 0.55, ((s.x1+s.x2)/W) - 1);
+  s.energy = 0.6; playNotes(s.notes, 0.55, ((s.x1+s.x2)/W) - 1);
 }
-function pluck(s, vel, now){
+function pluck(s, vel, now, dir = 1){
   s.last = now; s.energy = Math.max(s.energy, vel);
-  playNote(s.midi, vel, ((s.x1+s.x2)/W) - 1);
+  playNotes(s.notes, vel, ((s.x1+s.x2)/W) - 1, dir);
 }
 const cross = (a,b,c) => (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x);
 function segInt(p1,p2,q1,q2){
@@ -192,7 +246,10 @@ function tryPluck(a, b, dt, now){
     if (now - s.born < 350 || now - s.last < 150) continue;
     if (segInt(a, b, {x:s.x1,y:s.y1}, {x:s.x2,y:s.y2})){
       const speed = dist(a,b) / Math.max(dt, 8);           // px per ms
-      pluck(s, clamp(0.35 + speed / (diag * 0.0025), 0.35, 1), now);
+      // strum direction: down/right = low→high, up/left = high→low
+      const flat = Math.abs(s.x2-s.x1) > Math.abs(s.y2-s.y1);
+      const dir = Math.sign(flat ? b.y-a.y : b.x-a.x) || 1;
+      pluck(s, clamp(0.35 + speed / (diag * 0.0025), 0.35, 1), now, dir);
     }
   }
 }
@@ -201,9 +258,18 @@ function segDist(p, s){
   return Math.hypot(p.x-(s.x1+t*vx), p.y-(s.y1+t*vy));
 }
 function buildHarp(){
-  const notes = scaleNotes(), maxL = H * 0.78;
-  let start = notes.findIndex(n => lenForMidi(n) <= maxL); if (start < 0) start = 0;
-  const pick = notes.slice(start, start + 10), k = pick.length, base = H * 0.9;
+  const base = H - $('hint').offsetHeight - 14;            // keep clear of the toolbar and hint
+  const maxL = base - $('bar').offsetHeight - 34; let pick;
+  if (kind === 'chords'){
+    // one octave of the key's chords (skipping the diminished one)
+    let tonic = LOW + key; while (lenForMidi(tonic) > maxL && tonic + 12 <= HIGH - 11) tonic += 12;
+    pick = chordSet.steps.map(s => tonic + s).filter(m => m <= HIGH && !chordOn(m).dim);
+  } else {
+    const notes = candidates();
+    let start = notes.findIndex(n => lenForMidi(n) <= maxL); if (start < 0) start = 0;
+    pick = notes.slice(start, start + 10);
+  }
+  const k = pick.length;
   strings = pick.map((m, i) => {
     const x = W * (0.12 + 0.76 * (k === 1 ? 0.5 : i/(k-1))), L = lenForMidi(m);
     const s = makeString(x, base, x, base - L, m); s.born = 0; return s;
@@ -306,7 +372,7 @@ function drawPreview(d){
   g.save();
   g.setLineDash([6,6]); g.strokeStyle='#ffffff55'; g.lineWidth=1.5;
   g.beginPath(); g.moveTo(d.x1,d.y1); g.lineTo(d.x2,d.y2); g.stroke(); g.setLineDash([]);
-  for (const n of scaleNotes()){                         // "fret" ticks for every note of the scale
+  for (const n of candidates()){                         // "fret" ticks for every note / chord
     const Ln = lenForMidi(n); if (Ln > L + 80) continue;
     const x = d.x1+ux*Ln, y = d.y1+uy*Ln, big = n === m, t = big ? 10 : 5;
     g.strokeStyle = big ? '#fff' : '#ffffff80'; g.lineWidth = big ? 2.5 : 1.5;
@@ -316,8 +382,8 @@ function drawPreview(d){
     const Ls = lenForMidi(m), ex = d.x1+ux*Ls, ey = d.y1+uy*Ls;
     g.strokeStyle = `hsl(${hueFor(m)} 90% 70%)`; g.lineWidth = 3; g.shadowBlur = 14; g.shadowColor = g.strokeStyle;
     g.beginPath(); g.moveTo(d.x1,d.y1); g.lineTo(ex,ey); g.stroke(); g.shadowBlur = 0;
-    g.fillStyle = '#fff'; g.font = '600 15px system-ui'; g.textAlign = 'center';
-    g.fillText(noteName(m), ex + nx*22, ey + ny*22 + 5);
+    g.fillStyle = '#fff'; g.font = '700 16px system-ui'; g.textAlign = 'center';
+    g.fillText(kind === 'chords' ? chordOn(m).label : noteName(m), ex + nx*24, ey + ny*24 + 5);
   }
   g.restore();
 }
@@ -327,13 +393,20 @@ function drawString(s, t){
   const mx = (s.x1+s.x2)/2 + nx*off*2, my = (s.y1+s.y2)/2 + ny*off*2;
   const col = `hsl(${hueFor(s.midi)} 85% ${62 + s.energy*25}%)`;
   g.save();
-  g.strokeStyle = col; g.lineWidth = 1.6 + (1 - (s.midi-LOW)/(HIGH-LOW)) * 2.6;
+  const chord = s.notes.length > 1;
+  g.strokeStyle = col; g.lineWidth = chord ? 1.6 : 1.6 + (1 - (s.midi-LOW)/(HIGH-LOW)) * 2.6;
   g.shadowColor = col; g.shadowBlur = 6 + s.energy * 26;
-  g.beginPath(); g.moveTo(s.x1,s.y1); g.quadraticCurveTo(mx,my,s.x2,s.y2); g.stroke();
+  const strands = chord ? [-4, 0, 4] : [0];               // chord strings are drawn as three strands
+  g.beginPath();
+  for (const o of strands){
+    g.moveTo(s.x1+nx*o, s.y1+ny*o);
+    g.quadraticCurveTo(mx+nx*o*(1+s.energy), my+ny*o*(1+s.energy), s.x2+nx*o, s.y2+ny*o);
+  }
+  g.stroke();
   g.shadowBlur = 0; g.fillStyle = '#fff';
-  for (const [x,y] of [[s.x1,s.y1],[s.x2,s.y2]]){ g.beginPath(); g.arc(x,y,3.2,0,7); g.fill(); }
-  g.globalAlpha = 0.55 + s.energy*0.45; g.font = '600 12px system-ui'; g.textAlign = 'center';
-  g.fillText(noteName(s.midi), s.x2 + (dx/L)*14, s.y2 + (dy/L)*14 + 4);
+  for (const [x,y] of [[s.x1,s.y1],[s.x2,s.y2]]){ g.beginPath(); g.arc(x,y,chord ? 5 : 3.2,0,7); g.fill(); }
+  g.globalAlpha = 0.6 + s.energy*0.4; g.font = chord ? '700 15px system-ui' : '600 12px system-ui'; g.textAlign = 'center';
+  g.fillText(s.label, s.x2 + (dx/L)*16, s.y2 + (dy/L)*16 + 5);
   g.restore();
   s.energy *= 0.95;
 }
@@ -366,16 +439,18 @@ requestAnimationFrame(frame);
 
 // ---------- UI ----------
 function setHint(){
+  const what = kind === 'chords' ? 'аккорд' : 'нота';
+  const strum = kind === 'chords' ? ' Ведите вниз или вверх, и аккорд прозвучит в разную сторону, как удар по гитаре.' : '';
   $('hint').innerHTML = camOn
-    ? '<b>Сведите</b> большой и указательный пальцы → <b>тяните</b> → <b>разожмите</b>: струна готова. Короче струна — выше нота. <b>Проведите</b> пальцем сквозь струну, чтобы сыграть.'
+    ? `<b>Сведите</b> большой и указательный пальцы → <b>тяните</b> → <b>разожмите</b>: струна готова. Короче струна — выше ${what}. <b>Проведите</b> пальцем сквозь струну.${strum}`
     : (mode === 'draw'
-      ? 'Режим ✏️: <b>проведите линию</b>, и появится струна (чем короче, тем выше нота). Мышью можно играть, просто водя курсором сквозь струны.'
-      : 'Режим 🎵: <b>проводите пальцем</b> сквозь струны или касайтесь их. Переключите на ✏️, чтобы рисовать новые.');
+      ? `Режим ✏️: <b>проведите линию</b>, и появится струна (чем короче, тем выше ${what}). Мышью можно играть, просто водя курсором сквозь струны.`
+      : `Режим 🎵: <b>проводите пальцем</b> сквозь струны или касайтесь их.${strum} Переключите на ✏️, чтобы рисовать новые.`);
 }
 $('modeBtn').onclick = () => { mode = mode === 'draw' ? 'play' : 'draw'; $('modeBtn').textContent = mode === 'draw' ? '✏️ Рисую' : '🎵 Играю'; setHint(); };
 $('undoBtn').onclick = () => strings.pop();
 $('clearBtn').onclick = () => { strings = []; };
-$('harpBtn').onclick = () => { initAudio(); buildHarp(); mode = 'play'; $('modeBtn').textContent = '🎵 Играю'; setHint(); };
+$('harpBtn').onclick = () => { initAudio(); mode = 'play'; $('modeBtn').textContent = '🎵 Играю'; setHint(); buildHarp(); };
 addEventListener('keydown', e => {
   if (e.key === 'Backspace' || (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey))){ strings.pop(); e.preventDefault(); }
 });
